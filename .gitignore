@@ -1,0 +1,35 @@
+# Unreal Engine 5 — generated / intermediate / cache
+Binaries/
+Plugins/*/Binaries/
+DerivedDataCache/
+Intermediate/
+Plugins/*/Intermediate/
+Saved/
+
+# Build artifacts (keep pak blacklists & icons)
+Build/*
+!Build/*/
+!Build/*/PakBlacklist*.txt
+!Build/**/*.ico
+
+# IDE / editor user files
+.vs/
+.vscode/
+.idea/
+*.sln
+*.suo
+*.sdf
+*.opensdf
+*.VC.db
+*.VC.opendb
+*.code-workspace
+
+# OS junk
+Thumbs.db
+.DS_Store
+
+# Built data for maps
+*_BuiltData.uasset
+
+# Local machine config (engine path, IDE...) — written by the agent after asking the user
+docs/LOCAL.md

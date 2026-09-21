@@ -1,0 +1,9 @@
+ĐÂY LÀ BẢN TEMPLATE (unreal-agent-harness) — KHÔNG dev game trong repo này.
+
+Tạo game mới từ template:
+  1. Copy/sao cả repo này sang thư mục MỚI (hoặc GitHub "Use this template").
+  2. Ở thư mục mới: git init && bash scripts/init.sh "<Tên Game>"
+     (init.sh tự xoá file này).
+  3. Mở Unreal Editor → New Project ngay tại gốc thư mục đó → sinh <Tên>.uproject.
+
+File này tồn tại = repo chưa init. Sau init.sh nó biến mất.
