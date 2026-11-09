@@ -119,6 +119,72 @@ The agent writes **text**: C++ (`Source/`), `.uproject`, `Config/*.ini`, Python.
 - A feature counts as `dev_done` when its C++ compiles + auto-tests pass, with
   editor-only gaps listed as `TODO(dev):` — not when every asset exists.
 
+## 7. Unreal Gameplay Framework & runtime standards (UE5 baseline)
+
+> Added 2026-11 from production lessons (F-001 testmcp). These are the engine's
+> own architecture rules — a project that violates them "works" until it doesn't.
+
+### 7a. Framework roles — each class has exactly one job
+
+| Class | Role | In this game (example) |
+|---|---|---|
+| **GameMode** (server-only) | Referee: rules, score, win/lose, spawns players & ball | `BP_PongGameMode` |
+| **GameState** | Match state replicated to everyone (timer, score) | needed only for multiplayer |
+| **PlayerController** | The player's will: input, camera, UI/HUD, personal audio | `BP_MenuPlayerController` |
+| **Pawn / Character** | The physical body: mesh, collision, animation | `BP_PongCamera`, paddles |
+| **AIController** | The machine's brain: drives a Pawn (BT/Blackboard/StateTree) | an AI paddle's owner |
+
+Don't blur roles: scoring in a Pawn, movement in the GameMode, input in an Actor
+are all architecture bugs even when they run fine.
+
+### 7b. RootComponent & movement (hard rule — cost us 3 fix rounds)
+
+- The component that carries the **primary collision and moves physically must be
+  the RootComponent** (a `StaticMeshActor`-parented BP gets this for free).
+- Move the **Actor** (`AddActorWorldOffset` with sweep, `SetActorLocation`) or via
+  a **MovementComponent** — never move a child mesh and then teleport the actor
+  to catch up, never leave a SceneComponent root in front of a colliding mesh.
+- 2D-on-a-plane gameplay (pong, top-down): **`bConstrainToPlane` + plane normal**
+  on the movement component — corner hits can't launch the body off-plane.
+
+### 7c. Event-driven, not polling (Tick discipline)
+
+- **No searching or key-polling in Tick** (`GetActorOfClass`, `IsInputKeyDown`
+  every frame is the anti-pattern — it worked at 1 ball and still cost FPS).
+- Gameplay reacts via **events/delegates**: a GoalZone broadcasts; the GameMode
+  listens and scores. Lower classes never `Cast` up to GameMode to push data —
+  delegate up (see §2).
+- **Timers over Tick-counting**: `SetTimerByFunctionName/ByEvent` for delays,
+  cooldowns, periodic sweeps. A looping 3s timer beats a per-frame watchdog that
+  races the very timer it guards.
+- Turn Tick **off** (`PrimaryActorTick.bCanEverTick = false`) on anything that
+  doesn't need per-frame work; a Tick that only forwards is a candidate for
+  deletion.
+
+### 7d. Enhanced Input (mandatory from UE 5.1+)
+
+- `InputAction` (IA_*) defines the intent; `InputMappingContext` (IMC_*) binds
+  keys/keys→modifiers (Negate for the minus direction). Never read raw keys
+  (`IsInputKeyDown`) in shipped gameplay — polling was an MCP-tooling workaround
+  in F-001, not a pattern to copy.
+- Enable the IMC on the pawn/controller that owns input; clean input mode +
+  cursor when handing off to another level (a menu that doesn't unhook leaves the
+  next level keyboard-dead).
+
+### 7e. UMG for UI — PrintString is a debug log, never a UI
+
+- Any player-facing text lives in a **Widget Blueprint** added to the viewport;
+  update via **property binding** or delegates from GameState/PlayerState — the
+  widget pulls state, actors don't push strings into widgets.
+- Menu ↔ game handoff: `SetInputMode_UIOnly/GameOnly` + `bShowMouseCursor` +
+  `RemoveFromParent` before `OpenLevel` (all of it, every time).
+
+### 7f. No magic numbers
+
+Every tunable (speeds, scores, camera height, clamp ranges) is an
+`EditAnywhere` variable / Data Asset (§4) — never a literal inside a graph
+formula. If a number appears twice, it becomes a variable.
+
 ## Code review checklist (agent + dev)
 
 - [ ] Does it compile? (`Build.bat <Game>Editor Win64 Development -project=...`)
@@ -127,5 +193,11 @@ The agent writes **text**: C++ (`Source/`), `.uproject`, `Config/*.ini`, Python.
 - [ ] Pure logic stuck inside an Actor/Tick? (move it to plain C++)
 - [ ] Any runtime mutation of a shared Data Asset?
 - [ ] Does a subsystem hold state variables? Do tests reset the bus?
+- [ ] Framework roles respected — score in GameMode, input in Controller, physics in Pawn? (§7a)
+- [ ] Primary collision/moving component is the RootComponent? No mesh-move + teleport-actor hacks? (§7b)
+- [ ] Tick clean — no per-frame searching/polling/key reads? Timers/delegates instead? (§7c)
+- [ ] Enhanced Input assets in use, no raw IsInputKeyDown in shipped paths? (§7d)
+- [ ] Player-facing text in UMG (not PrintString)? Input mode/cursor handed off cleanly between levels? (§7e)
+- [ ] No magic numbers in graphs — everything tunable is EditAnywhere? (§7f)
 - [ ] Open the editor: do class/asset names + folder layout explain themselves?
 - [ ] Binary (`.uasset`) changes described in §Changelog — diff is meaningless on them?
