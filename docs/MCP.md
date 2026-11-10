@@ -95,3 +95,50 @@ must be recorded in `SESSION.done` (evidence) when it changes anything.
   a full automation run.
 - Asset changes made through MCP are binary — describe them in the feature's
   §Changelog (`docs/CODING.md` §0b); git diff won't show anything useful.
+
+## MCP authoring pitfalls (distilled from testmcp F-001, 31 rounds — 2026-11)
+
+Reusable traps of the EngineWire `edit_graph`/`edit_scs` DSL. Every item below
+cost real debugging rounds; check this list before blaming the engine.
+
+**Graph building**
+- `edit_scs` **single-payload** `modify` silently drops transform values (rotation
+  lost). Always use the `operations: [...]` array form for transforms.
+- **Node GUIDs drift** after many edits/undo resets. Before wiring old nodes by
+  GUID, re-list the graph (`inspect_graph info=graph`); stale GUIDs fail with
+  NODE_NOT_FOUND.
+- `add_event_dispatcher` must run **alone in its own batch** — the validator
+  can't see a dispatcher declared earlier in the same batch.
+- Cast node `targetClass` is **immutable** after creation — re-pointing a
+  reference means delete + recreate the cast + rewire.
+- Pin names differ from display: BreakStruct Vector resolves to a function with
+  input `InVec`; HitResult break input is `Hit`; Select node options are
+  `Option 0`/`Option 1`. Read the error — it lists the real pins.
+- **Pure nodes have no exec pins** (`IsInputKeyDown`, `GetActorOfClass`,
+  `Conv_StringToText`, `MirrorVectorByNormal`, most math): never wire exec into
+  them; feed a Branch instead.
+
+**MathExpression**
+- A comparison cannot be a value: write `SelectFloat(1, 0, A > B)`. `Sign` needs
+  a typed overload — prefer `SelectFloat(x, -x, cond)`.
+- **Select with a bool condition: `false` converts to Index 0** — Option 0 is
+  the FALSE branch. Wiring it backwards shows the wrong text from frame one
+  (cost a full round: "YOU WIN!" at 0-0).
+
+**Unreal movement/collision (via MCP or not)**
+- `AddActorWorldOffset` with sweep is a **no-op when the root has no collision**
+  (DefaultSceneRoot). Either parent Blueprint to `StaticMeshActor` (mesh = root,
+  the testmcp fix) or clamp movement mathematically — do NOT sweep a child mesh
+  per-frame and teleport the actor after it (jitter + wall-stuck).
+- 2D-on-a-plane gameplay: `bConstrainToPlane + plane normal` on the movement
+  component; corner hits can't launch the body off-plane.
+- Set `BounceVelocityStopSimulatingThreshold = 0` — chattering bounces in tight
+  gaps otherwise petrify the projectile (velocity zeroed, StopSimulating).
+- **Don't write velocity inside a Hit handler of a ProjectileMovement body** —
+  it races the PMC's own bounce for the last write. Do it at spawn, or detect
+  stuck states with a position-delta check instead.
+- A **looping 3s(+) timer beats a per-tick watchdog**: per-frame checks race
+  the very respawn timers they guard (double-spawn / mass-spawn cascades).
+- Reset any position-memory (e.g. LastBallPos) **at spawn time**, or a fresh
+  actor gets compared against the previous one's ghost position (false-positive
+  "stuck" → mystery mid-flight resets).
