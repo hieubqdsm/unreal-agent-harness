@@ -196,6 +196,12 @@ BUILD_BAT="<ue_root>/Engine/Build/BatchFiles/Build.bat"
 - No auto test → leave `auto_test: none` (that's fine, playtest is the main gate).
 - **Never** drop `-nullrhi -unattended` "to see what happens" — that opens a window
   (§0.2).
+- **Editor open + Live Coding blocks the CLI build** (`Unable to build while Live
+  Coding is active`): when the user's editor is running, `Build.bat` is refused.
+  Do NOT kill the editor (§0.2). Ask the user to either press **Ctrl+Alt+F11**
+  in the editor (Live Coding compiles the new C++ in place, MCP stays alive) —
+  preferred — or close the editor so the headless §6 pipeline can run. If Live
+  Coding fails on big structural changes (new modules), fall back to closing.
 - Packaging (`BuildCookRun`) is heavy — only when a feature/playtest needs a build;
   never "just to check".
 
