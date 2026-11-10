@@ -94,7 +94,8 @@ principle: not written down = considered never asked.
 4. Add one row to `docs/ROADMAP.md` (feature register).
 5. Commit.
 6. Before writing the feature's first line of code → read the policy `docs/CODING.md`
-   (headless-testable, call-down/delegate-up, C++/Blueprint split, binary-asset rule).
+   (headless-testable, call-down/delegate-up, C++/Blueprint split, binary-asset rule,
+   senior Blueprint hygiene, UE5 asset standards & authority rules).
 
 ## 3. Feature lifecycle (state machine)
 

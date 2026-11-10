@@ -75,7 +75,7 @@ git commit -m "sync harness from template"
 | File | Role |
 |---|---|
 | `docs/WORKFLOW.md` | Full process: roles, state machine, session start/end protocols, state discipline |
-| `docs/CODING.md` | Code-writing policy: headless-testable, call-down/delegate-up, moderate composition, C++/Blueprint split, binary-asset rules |
+| `docs/CODING.md` | Code-writing policy: headless-testable, call-down/delegate-up, moderate composition, C++/Blueprint split, binary-asset rules, senior Blueprint graph hygiene, UE5 asset standards & authority rules |
 | `docs/ROADMAP.md` | Overall plan: milestones + feature table |
 | `docs/SESSION.md` | **Resume entry point** — current work + next step (structured handoff) |
 | `docs/SETUP.md` | Standard ask-the-user machine setup + `docs/LOCAL.md` format (gitignored) |

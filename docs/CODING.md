@@ -185,19 +185,231 @@ Every tunable (speeds, scores, camera height, clamp ranges) is an
 `EditAnywhere` variable / Data Asset (§4) — never a literal inside a graph
 formula. If a number appears twice, it becomes a variable.
 
+## 8. Senior Blueprint Graph Architecture & Hygiene
+
+> Blueprints are compiled to bytecode and run on Unreal's VM. Bad Blueprint
+> practices ruin frame time and cause massive memory bloat via asset reference trees.
+> Senior engineers treat Blueprints with the exact same rigor as C++.
+
+### 8a. Memory & Reference Hygiene — the Size Map trap
+
+- **Hard Object References vs Soft References (`TSoftObjectPtr`, `TSoftClassPtr`):**
+  - A variable of type `BP_HeavyCharacter` or a `Cast to BP_HeavyCharacter` inside
+    a HUD Widget creates a **synchronous hard dependency**. Loading that HUD
+    forces the engine to load the character mesh, textures, audio, anim BP, and
+    all attached weapons into memory immediately!
+  - Check the **Reference Viewer** / **Size Map** in the editor: if a small UI or
+    data asset pulls in hundreds of megabytes, you have a hard reference leak.
+  - **Solution:**
+    - Use **Blueprint Interfaces (`BPI_`)** for cross-actor communication — zero hard
+      asset dependencies.
+    - Use **Soft References** (`TSoftObjectPtr<T>`, `TSoftClassPtr<T>`) for heavy
+      assets (weapons, skins, levels) and load asynchronously via `AsyncLoadAsset`
+      or `FStreamableManager`.
+
+### 8b. The Pure Function Re-Execution Trap (Green Nodes)
+
+- **Pure functions (green nodes with no exec pin) have NO cache:**
+  - Unreal executes a pure function **every single time** any of its output pins
+    are read down the graph chain.
+  - If a pure function performs a line trace, array loop, or math formula, and its
+    result is wired to 4 subsequent nodes, **it runs 4 separate times** in that single frame!
+- **Rule:**
+  - Never put loops, traces, or expensive calculations in a Pure function.
+  - When calling a pure node whose output is needed more than once: promote/set it
+    to a **Local Variable** first, then read that local variable.
+  - If a function has non-trivial cost, make it **Impure** (with exec pins) so it
+    runs exactly once.
+
+### 8c. Cast vs Blueprint Interface vs Cached Pointer
+
+- **Avoid frequent casting:**
+  - `Cast To` creates a compile-time hard dependency and incurs execution overhead.
+  - **Never cast inside Event Tick or tight loops.**
+  - If an Actor needs a typed reference: cast **once** in `BeginPlay` (or on setup),
+    store the typed pointer in a variable, and check `IsValid` before using.
+- **Interfaces (`BPI_`) are king for gameplay decoupling:**
+  - Interactions (`IInteractable`), damage dispatch (`IDamageable`), UI data feeds
+    (`IPlayerHUDProvider`) should be Blueprint Interfaces.
+  - Calling an interface message on an Actor that doesn't implement it is a safe no-op
+    and creates zero asset dependencies.
+
+### 8d. Construction Script Boundaries (Pure Setup Only)
+
+- The **Construction Script** runs in the editor viewport every time the Actor is
+  moved, rotated, or any property is changed in the Details panel.
+- **Strictly forbidden in Construction Script:**
+  - Spawning other Actors (`SpawnActor`).
+  - Starting Timers or triggering Async operations.
+  - Binding Event Dispatchers or delegates.
+  - Modifying global game state or touching GameMode/GameState.
+- **Permitted in Construction Script:**
+  - Creating and assigning Dynamic Material Instances (`CreateDynamicMaterialInstance`).
+  - Swapping static meshes based on `EditAnywhere` enums/flags.
+  - Procedural spline mesh generation for level dressing.
+
+### 8e. Flow Control: Functions vs Macros vs Collapsed Graphs
+
+- **Functions (`UFUNCTION` in C++, or BP Function):**
+  - Has its own local variables, call stack, and memory frame.
+  - Supports recursion, can be overridden by child Blueprints.
+  - Best for encapsulated operations, calculations, and interface implementations.
+- **Macros:**
+  - Inline expansion (compiler pastes graph nodes at call site).
+  - Can have **multiple execution inputs/outputs** (e.g. `Branch`, custom loops).
+  - No local variables (shares macro parent's scope), **cannot be recursive**.
+  - Keep macros small and reusable; don't bury complex game logic inside deep macros.
+- **Collapsed Graphs:**
+  - Pure visual grouping in the editor graph to declutter wires. No execution or
+    scope difference whatsoever.
+
+### 8f. Event Dispatcher & Delegate Lifecycle Management
+
+- When an Actor or Widget binds to an Event Dispatcher, it creates a reference.
+- **Always unbind or clear bindings** when the object is destroyed or removed:
+  - UMG Widgets: unbind in `Destruct` or `RemoveFromParent`.
+  - Actors: unbind in `EndPlay`.
+- Leaving dangling delegate bindings leads to callbacks executing on dying/stale
+  objects, phantom state bugs, and garbage collection prevention (memory leaks).
+
+---
+
+## 9. UE5 Asset & Folder Standards (Epic Games Style Guide)
+
+> A clean project structure allows human developers, testers, and AI agents to
+> instantly find assets and understand their type without opening them.
+
+### 9a. Standard Directory Layout
+
+All project content lives under a dedicated root game folder (never dump directly
+into `/Content/` root):
+
+```
+/Content/<ProjectName>/
+  ├── Core/             # GameMode, GameState, PlayerController, GameInstance
+  ├── Characters/       # Meshes, AnimBPs, Character Blueprints
+  ├── Data/             # DataAssets (DA_), DataTables (DT_), Curves
+  ├── Input/            # InputActions (IA_), InputMappingContexts (IMC_)
+  ├── UI/               # Widget Blueprints (WBP_), HUD textures, fonts
+  ├── Environment/      # Maps/Levels (.umap), StaticMeshes (SM_), Materials
+  ├── Audio/            # MetaSounds (MS_), Sound Cues (SC_), Sound Waves (S_)
+  └── VFX/              # Niagara Systems (NS_), Emitters (NE_)
+```
+
+### 9b. Standard Asset Prefixes (UE5 Canonical)
+
+| Asset Type | Prefix | Example |
+|---|---|---|
+| Blueprint Class | `BP_` | `BP_PlayerCharacter` |
+| Widget Blueprint (UMG) | `WBP_` | `WBP_HealthBar` |
+| Blueprint Interface | `BPI_` | `BPI_Interactable` |
+| Blueprint Component | `BPC_` | `BPC_HealthComponent` |
+| Enumeration | `E_` | `E_WeaponType` |
+| Structure | `F_` (C++) / `S_` (BP) | `F_ItemData` |
+| Primary Data Asset / Data Asset | `DA_` | `DA_PistolStats` |
+| Data Table | `DT_` | `DT_WeaponBalancing` |
+| Input Action | `IA_` | `IA_Jump`, `IA_Move` |
+| Input Mapping Context | `IMC_` | `IMC_Default` |
+| Master Material | `M_` | `M_HeroBase` |
+| Material Instance | `MI_` | `MI_HeroRed` |
+| Material Function | `MF_` | `MF_FoliageWind` |
+| Texture | `T_` | `T_Hero_D` (Diffuse), `T_Hero_N` (Normal) |
+| Static Mesh | `SM_` | `SM_DoorFrame` |
+| Skeletal Mesh | `SK_` or `SKM_` | `SKM_Hero` |
+| Animation Blueprint | `ABP_` | `ABP_Hero` |
+| Animation Montage | `AM_` | `AM_SwordAttack_01` |
+| Niagara System | `NS_` | `NS_MuzzleFlash` |
+| MetaSound / Sound Cue | `MS_` / `SC_` | `MS_EngineSound`, `SC_Explosion` |
+
+---
+
+## 10. UE5 Performance, Memory & Compilation Engineering
+
+### 10a. Advanced Tick & Timer Engineering
+
+- **Ticking is off by default:**
+  - `PrimaryActorTick.bCanEverTick = false;` in constructor.
+  - If a component or actor needs per-frame logic, question whether a timer or
+    event can do it instead.
+- **Tick Intervals & Tick Groups:**
+  - If ticking is genuinely required (e.g. an AI distance check or health regeneration):
+    set `PrimaryActorTick.TickInterval = 0.1f;` (10 times/sec instead of 60–120 times/sec).
+  - Use `TickGroup` deliberately:
+    - `TG_PrePhysics`: input, player movement.
+    - `TG_PostPhysics`: camera updates, HUD tracking physical objects (avoids 1-frame jitter).
+- **Timers:**
+  - Always use `FTimerHandle` with `GetWorldTimerManager().SetTimer(...)`.
+  - Clear active timers in `EndPlay()` to avoid firing after actor death.
+
+### 10b. Collision Channel & Overlap Optimization
+
+- Never use `BlockAll` or `OverlapAllDynamic` as a lazy fix.
+- Create custom **Object Channels** (e.g. `Projectile`, `Pickup`) and **Trace Channels**
+  (e.g. `WeaponTrace`, `InteractTrace`) in `Config/DefaultEngine.ini`.
+- Disable collision completely (`SetCollisionEnabled(ECollisionEnabled::NoCollision)`)
+  on purely decorative visual meshes.
+- Turn off **`Generate Overlap Events`** on any mesh/component that does not actively
+  need to trigger `OnComponentBeginOverlap`. Having overlap enabled on hundreds of
+  static meshes chokes physics engine broadphase.
+
+### 10c. Fast C++ Compilation Hygiene (Keep agent compile sub-minute)
+
+- **Header Include Hygiene:**
+  - In `.h` files: **always use forward declarations** (`class APlayerCharacter;`,
+    `class UStaticMeshComponent;`, `struct FGameplayTag;`) instead of `#include`.
+  - Never `#include "Engine.h"`. Only include `#include "CoreMinimal.h"`, the base
+    class header, and the `.generated.h` (always last).
+  - Put full `#include "PlayerCharacter.h"` in `.cpp` files only.
+  - This keeps compile turnaround fast for both developer and headless agent checks.
+- **`UPROPERTY()` Garbage Collection Semantics:**
+  - Any raw `UObject*` pointer stored on an Actor/Component without `UPROPERTY()`
+    is **invisible to the Unreal Garbage Collector** and will be freed out from
+    under you, leading to wild crashes.
+  - If you hold a pointer to another object you do NOT own, use `TWeakObjectPtr<T>`
+    or decorate with `UPROPERTY()` so the engine handles cleanup safely.
+
+---
+
+## 11. Multiplayer & Authority Preparedness (Even in SP)
+
+> Writing single-player code that completely ignores authority makes multiplayer
+> refactoring an impossible rewrite later. Senior engineers build with authority
+> boundaries from day one.
+
+- **Authority Discipline (`HasAuthority()`):**
+  - Game state modification (damage, score, inventory, spawning items/enemies)
+    must execute exclusively on the Authority (`HasAuthority()` == true).
+  - Clients send player intent (e.g. via Enhanced Input → Server RPC).
+- **Framework Lifetimes across Network:**
+  - `GameMode`: Exists **only on the server**. Never attempt to read GameMode on a client.
+  - `GameState`: Replicated to all clients. Use this for replicated match state (timer, score).
+  - `PlayerController`: Exists on the server for all players, but on a client **only for the local player**.
+  - `PlayerState`: Replicated to all clients. Holds persistent player data (name, ping, score, kills)
+    that survives Pawn deaths and respawns.
+- **Cosmetics vs Simulation:**
+  - Simulation (math, traces, cooldowns) = Authority.
+  - Audio, Niagara effects, screen shakes, UI animations = Client (triggered via
+    RepNotify or NetMulticast).
+
+---
+
 ## Code review checklist (agent + dev)
 
 - [ ] Does it compile? (`Build.bat <Game>Editor Win64 Development -project=...`)
 - [ ] Do the automation tests pass? (`Automation RunTests <Filter>` with `-nullrhi`)
-- [ ] Any component crawling upward into owner/siblings?
-- [ ] Pure logic stuck inside an Actor/Tick? (move it to plain C++)
-- [ ] Any runtime mutation of a shared Data Asset?
-- [ ] Does a subsystem hold state variables? Do tests reset the bus?
+- [ ] Any component crawling upward into owner/siblings? (§2)
+- [ ] Pure logic stuck inside an Actor/Tick? (move it to plain C++ or subsystem) (§3)
+- [ ] Any runtime mutation of a shared Data Asset? (§4)
+- [ ] Does a subsystem hold state variables? Do tests reset the bus? (§5)
 - [ ] Framework roles respected — score in GameMode, input in Controller, physics in Pawn? (§7a)
 - [ ] Primary collision/moving component is the RootComponent? No mesh-move + teleport-actor hacks? (§7b)
-- [ ] Tick clean — no per-frame searching/polling/key reads? Timers/delegates instead? (§7c)
-- [ ] Enhanced Input assets in use, no raw IsInputKeyDown in shipped paths? (§7d)
+- [ ] Tick clean — `bCanEverTick = false` where possible? No per-frame searching/polling/key reads? Timers/delegates instead? (§7c, §10a)
+- [ ] Enhanced Input assets in use, no raw `IsInputKeyDown` in shipped paths? (§7d)
 - [ ] Player-facing text in UMG (not PrintString)? Input mode/cursor handed off cleanly between levels? (§7e)
-- [ ] No magic numbers in graphs — everything tunable is EditAnywhere? (§7f)
+- [ ] No magic numbers in graphs — everything tunable is `EditAnywhere` or Data Asset? (§7f)
+- [ ] **Blueprint hygiene (§8):** No hard reference size map explosions? Interfaces used for cross-actor calls? No loops/traces in Pure Functions? Construction Script free from side-effects/spawns?
+- [ ] **Asset naming & layout (§9):** Standard prefixes used (`BP_`, `WBP_`, `DA_`, `IA_`, `IMC_`...)? Folder placed inside `/Content/<GameName>/`?
+- [ ] **Performance & compilation (§10):** Forward declarations used in headers? Collision channels customized and unneeded overlap events disabled?
+- [ ] **Authority respected (§11):** Gameplay mutations gated by `HasAuthority()`?
 - [ ] Open the editor: do class/asset names + folder layout explain themselves?
 - [ ] Binary (`.uasset`) changes described in §Changelog — diff is meaningless on them?
